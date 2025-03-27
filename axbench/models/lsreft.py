@@ -96,7 +96,8 @@ class LsReFT(Model):
             num_warmup_steps=0, num_training_steps=num_training_steps)
         norm_loss_fn = torch.nn.MSELoss()
         # Main training loop.
-        rank = torch.distributed.get_rank()
+        rank = 0 # rank = torch.distributed.get_rank() 
+        
         progress_bar, curr_step = tqdm(range(num_training_steps), position=rank, leave=True), 0
         
         for epoch in range(self.training_args.n_epochs):

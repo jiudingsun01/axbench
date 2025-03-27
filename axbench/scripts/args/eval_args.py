@@ -62,6 +62,9 @@ class EvalArgs:
             for arg in custom_args:
                 parser.add_argument(*arg['args'], **arg['kwargs'])
 
+        # Add a meaningless placeholder to run stuff in notebook. Could be deleted 
+        parser.add_argument('--f', default=None, help='Placeholder variable to run things over notebook', type=str)
+        
         args = parser.parse_args()
 
         # Load the YAML configuration file

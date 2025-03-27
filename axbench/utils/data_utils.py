@@ -71,13 +71,17 @@ class InterventionDataCollator(object):
     
     tokenizer: transformers.AutoTokenizer
     data_collator: transformers.DataCollator
+    include_concept: bool = False
+    concept_tokenizer : transformers.AutoTokenizer = None
 
     def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
         max_intervention_len = max([len(inst["intervention_locations"][0]) for inst in instances])
         max_seq_len = max([len(inst["input_ids"]) for inst in instances])
+        max_concept_seq_len = max([len(inst["concept_input_ids"]) for inst in instances])
         
         for inst in instances:
             non_pad_len = len(inst["input_ids"])
+            concept_non_pad_len = len(inst["concept_input_ids"])
 
             _intervention_mask = torch.ones_like(inst["intervention_locations"][0])
             _intervention_location_paddings = torch.tensor(
@@ -92,11 +96,16 @@ class InterventionDataCollator(object):
             _input_id_paddings = torch.tensor(
                 [self.tokenizer.pad_token_id for _ in range(max_seq_len - non_pad_len)])
             inst["input_ids"] = torch.cat((inst["input_ids"], torch.tensor([self.tokenizer.pad_token_id]), _input_id_paddings)).int()
+            
+            _concept_input_id_paddings = torch.tensor(
+                [self.concept_tokenizer.pad_token_id for _ in range(max_concept_seq_len - concept_non_pad_len)])
+            inst["concept_input_ids"] = torch.cat((_concept_input_id_paddings, inst["concept_input_ids"])).int()
 
             _label_paddings = torch.tensor([-100 for _ in range(max_seq_len - non_pad_len+1)])
             inst["labels"] = torch.cat((inst["labels"], _label_paddings))
             
             inst["attention_mask"] = (inst["input_ids"] != self.tokenizer.pad_token_id).int()
+            inst["concept_attention_mask"] = (inst["concept_input_ids"] != self.concept_tokenizer.pad_token_id).int()
 
         batch_inputs = self.data_collator(instances)
         return batch_inputs
@@ -108,16 +117,24 @@ def make_data_module(
     positions="all", # "all_prompt" or "all" or "f1+l1" (pyreft formatting)
     exclude_bos=True,
     prefix_length=1,
+    include_concept=False,
+    concept_tokenizer=None,
     **kwargs
 ):
     """Make dataset and collator for supervised fine-tuning with kl div loss."""
     if not exclude_bos:
         prefix_length = 0
     
-    all_base_input_ids, all_intervention_locations, all_output_ids,  = [], [], []
+    concept_tokenizer = concept_tokenizer if concept_tokenizer is not None else tokenizer
+    
+    all_base_input_ids, all_intervention_locations, all_output_ids, all_concept_input_ids  = [], [], [], []
     all_prompt_lengths = []
+    all_concept_ids = []
+    
     for _, row in df.iterrows():
-        _input, _output = row["input"], row["output"]
+        _concept, _input, _output = row["output_concept"], row["input"], row["output"]
+        all_concept_ids.append(row["concept_id"])
+        
         # prepare input ids
         base_prompt = _input
         if isinstance(_output, float):
@@ -133,6 +150,9 @@ def make_data_module(
         # output ids with prompt token mask
         output_ids = base_input_ids.clone()
         output_ids[:base_prompt_length] = -100
+        
+        concept_input_ids = concept_tokenizer(
+            _concept, max_length=1024, truncation=True, return_tensors="pt")["input_ids"][0]
 
         if positions is None or positions == "all_prompt":
             intervention_locations = torch.tensor([[i for i in range(prefix_length, base_prompt_length)]])
@@ -151,24 +171,32 @@ def make_data_module(
             # shift intervention locations by prefix length
             shifted_intervention_locations = [[loc + prefix_length for loc in intervention_locations[0]]]
             intervention_locations = shifted_intervention_locations
+        
+        
+        all_concept_input_ids.append(concept_input_ids)
         all_intervention_locations.append(intervention_locations)
         all_base_input_ids.append(base_input_ids)
         all_output_ids.append(output_ids)
         all_prompt_lengths.append(torch.tensor(base_prompt_length - 1)) # exclude bos token
-        
+    
     train_dataset = datasets.Dataset.from_dict({
         "input_ids": all_base_input_ids,
         "intervention_locations": all_intervention_locations,
         "labels": all_output_ids,
         "prompt_lengths": all_prompt_lengths,
+        "concept_input_ids": all_concept_input_ids,
+        "concept_ids": torch.tensor(all_concept_ids)
     })
     train_dataset.set_format(
         type='torch', columns=[
-            'input_ids', 'intervention_locations', 'prompt_lengths', 'labels'])
+            'input_ids', 'intervention_locations', 'prompt_lengths', 'labels', 'concept_input_ids', 'concept_ids'])
 
     data_collator_fn = transformers.DefaultDataCollator(
         return_tensors="pt"
     )
-    data_collator = InterventionDataCollator(tokenizer=tokenizer, data_collator=data_collator_fn)
+    data_collator = InterventionDataCollator(
+        tokenizer=tokenizer, data_collator=data_collator_fn, 
+        include_concept=include_concept, concept_tokenizer=concept_tokenizer)
+    
     return dict(train_dataset=train_dataset, eval_dataset=None, data_collator=data_collator)
 

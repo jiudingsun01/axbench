@@ -367,7 +367,6 @@ def main():
                 model_name=args.model_name,
                 max_num_of_examples=args.max_num_of_examples,
             )
-            print()
             benchmark_model.train(prepared_df, **kwargs)
             benchmark_model.save(dump_dir, model_name=f"rank_{rank}_{model_name}")
             if model_name == "SFT":

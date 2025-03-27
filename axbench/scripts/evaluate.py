@@ -266,7 +266,7 @@ def eval_steering_single_task(args_tuple):
     
     # Create LanguageModel instance within the worker process
     client = AsyncOpenAI(
-        api_key="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",
+        api_key="",
         timeout=60.0,
         http_client=httpx.AsyncClient(
             limits=httpx.Limits(
